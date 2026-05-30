@@ -1,7 +1,7 @@
 #![allow(clippy::inline_always)]
 
 use core::ffi::*;
-use std::{any::TypeId, cell::Ref};
+use std::any::TypeId;
 
 use libffi::middle::Type;
 use mlua::prelude::*;
@@ -111,8 +111,8 @@ where
         &self,
         from_info: &LuaAnyUserData,
         into_info: &LuaAnyUserData,
-        from: &Ref<dyn FfiData>,
-        into: &Ref<dyn FfiData>,
+        from: &dyn FfiData,
+        into: &dyn FfiData,
         from_offset: isize,
         into_offset: isize,
     ) -> LuaResult<()> {

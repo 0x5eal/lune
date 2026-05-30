@@ -3,8 +3,8 @@
 use mlua::prelude::*;
 
 use rbx_dom_weak::{
-    types::{Variant as DomValue, VariantType as DomType},
     Instance as DomInstance,
+    types::{Variant as DomValue, VariantType as DomType},
 };
 
 use crate::{
@@ -17,10 +17,10 @@ use crate::{
     shared::instance::{class_is_a, find_property_info},
 };
 
-use super::{data_model, registry::InstanceRegistry, Instance};
+use super::{Instance, data_model, registry::InstanceRegistry};
 
 #[allow(clippy::too_many_lines)]
-pub fn add_methods<'lua, M: LuaUserDataMethods<'lua, Instance>>(m: &mut M) {
+pub fn add_methods<M: LuaUserDataMethods<Instance>>(m: &mut M) {
     m.add_meta_method(LuaMetaMethod::ToString, |lua, this, ()| {
         ensure_not_destroyed(this)?;
         userdata_impl_to_string(lua, this, ())
@@ -71,7 +71,7 @@ pub fn add_methods<'lua, M: LuaUserDataMethods<'lua, Instance>>(m: &mut M) {
         "FindFirstAncestorWhichIsA",
         |lua, this, class_name: String| {
             ensure_not_destroyed(this)?;
-            this.find_ancestor(|child| class_is_a(&child.class, &class_name).unwrap_or(false))
+            this.find_ancestor(|child| class_is_a(child.class, &class_name).unwrap_or(false))
                 .into_lua(lua)
         },
     );
@@ -104,7 +104,7 @@ pub fn add_methods<'lua, M: LuaUserDataMethods<'lua, Instance>>(m: &mut M) {
         |lua, this, (class_name, recursive): (String, Option<bool>)| {
             ensure_not_destroyed(this)?;
             let predicate =
-                |child: &DomInstance| class_is_a(&child.class, &class_name).unwrap_or(false);
+                |child: &DomInstance| class_is_a(child.class, &class_name).unwrap_or(false);
             if matches!(recursive, Some(true)) {
                 this.find_descendant(predicate).into_lua(lua)
             } else {
@@ -113,7 +113,7 @@ pub fn add_methods<'lua, M: LuaUserDataMethods<'lua, Instance>>(m: &mut M) {
         },
     );
     m.add_method("IsA", |_, this, class_name: String| {
-        Ok(class_is_a(&this.class_name, class_name).unwrap_or(false))
+        Ok(class_is_a(this.class_name, class_name).unwrap_or(false))
     });
     m.add_method(
         "IsAncestorOf",
@@ -211,11 +211,7 @@ fn ensure_not_destroyed(inst: &Instance) -> LuaResult<()> {
     3. Get a current child of the instance
     4. No valid property or instance found, throw error
 */
-fn instance_property_get<'lua>(
-    lua: &'lua Lua,
-    this: &Instance,
-    prop_name: String,
-) -> LuaResult<LuaValue<'lua>> {
+fn instance_property_get(lua: &Lua, this: &Instance, prop_name: String) -> LuaResult<LuaValue> {
     match prop_name.as_str() {
         "ClassName" => return this.get_class_name().into_lua(lua),
         "Parent" => {
@@ -230,7 +226,7 @@ fn instance_property_get<'lua>(
         return this.get_name().into_lua(lua);
     }
 
-    if let Some(info) = find_property_info(&this.class_name, &prop_name) {
+    if let Some(info) = find_property_info(this.class_name, &prop_name) {
         if let Some(prop) = this.get_property(&prop_name) {
             if let DomValue::Enum(enum_value) = prop {
                 let enum_name = info.enum_name.ok_or_else(|| {
@@ -275,7 +271,7 @@ fn instance_property_get<'lua>(
     } else if let Some(inst) = this.find_child(|inst| inst.name == prop_name) {
         Ok(LuaValue::UserData(lua.create_userdata(inst)?))
     } else if let Some(getter) = InstanceRegistry::find_property_getter(lua, this, &prop_name) {
-        getter.call(this.clone())
+        getter.call(*this)
     } else if let Some(method) = InstanceRegistry::find_method(lua, this, &prop_name) {
         Ok(LuaValue::Function(method))
     } else {
@@ -295,10 +291,10 @@ fn instance_property_get<'lua>(
         2a. Set a strict enum from a given EnumItem OR
         2b. Set a normal property from a given value
 */
-fn instance_property_set<'lua>(
-    lua: &'lua Lua,
+fn instance_property_set(
+    lua: &Lua,
     this: &mut Instance,
-    (prop_name, prop_value): (String, LuaValue<'lua>),
+    (prop_name, prop_value): (String, LuaValue),
 ) -> LuaResult<()> {
     ensure_not_destroyed(this)?;
 
@@ -319,19 +315,19 @@ fn instance_property_set<'lua>(
                     "Failed to set Parent - DataModel can not be reparented".to_string(),
                 ));
             }
-            type Parent<'lua> = Option<LuaUserDataRef<'lua, Instance>>;
+            type Parent = Option<LuaUserDataRef<Instance>>;
             let parent = Parent::from_lua(prop_value, lua)?;
-            this.set_parent(parent.map(|p| p.clone()));
+            this.set_parent(parent.map(|p| *p));
             return Ok(());
         }
         _ => {}
     }
 
-    if let Some(info) = find_property_info(&this.class_name, &prop_name) {
+    if let Some(info) = find_property_info(this.class_name, &prop_name) {
         if let Some(enum_name) = info.enum_name {
             match LuaUserDataRef::<EnumItem>::from_lua(prop_value, lua) {
                 Ok(given_enum) if given_enum.parent.desc.name == enum_name => {
-                    this.set_property(prop_name, DomValue::Enum((*given_enum).clone().into()));
+                    this.set_property(prop_name, DomValue::EnumItem((*given_enum).clone().into()));
                     Ok(())
                 }
                 Ok(given_enum) => Err(LuaError::RuntimeError(format!(
@@ -354,7 +350,7 @@ fn instance_property_set<'lua>(
             )))
         }
     } else if let Some(setter) = InstanceRegistry::find_property_setter(lua, this, &prop_name) {
-        setter.call((this.clone(), prop_value))
+        setter.call((*this, prop_value))
     } else {
         Err(LuaError::RuntimeError(format!(
             "{prop_name} is not a valid member of {this}",

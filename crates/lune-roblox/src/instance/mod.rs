@@ -4,40 +4,48 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
     hash::{Hash, Hasher},
-    sync::Mutex,
+    sync::{LazyLock, Mutex},
 };
 
+#[cfg(feature = "mlua")]
 use mlua::prelude::*;
-use once_cell::sync::Lazy;
+
 use rbx_dom_weak::{
+    Instance as DomInstance, InstanceBuilder as DomInstanceBuilder, Ustr, WeakDom,
     types::{Attributes as DomAttributes, Ref as DomRef, Variant as DomValue},
-    Instance as DomInstance, InstanceBuilder as DomInstanceBuilder, WeakDom,
+    ustr,
 };
 
+#[cfg(feature = "mlua")]
 use lune_utils::TableBuilder;
 
-use crate::{
-    exports::LuaExportsTable,
-    shared::instance::{class_exists, class_is_a},
-};
+use crate::shared::instance::class_is_a;
 
+#[cfg(feature = "mlua")]
+use crate::{exports::LuaExportsTable, shared::instance::class_exists};
+
+#[cfg(feature = "mlua")]
 pub(crate) mod base;
+#[cfg(feature = "mlua")]
 pub(crate) mod data_model;
+#[cfg(feature = "mlua")]
 pub(crate) mod terrain;
+#[cfg(feature = "mlua")]
 pub(crate) mod workspace;
 
+#[cfg(feature = "mlua")]
 pub mod registry;
 
 const PROPERTY_NAME_ATTRIBUTES: &str = "Attributes";
 const PROPERTY_NAME_TAGS: &str = "Tags";
 
-static INTERNAL_DOM: Lazy<Mutex<WeakDom>> =
-    Lazy::new(|| Mutex::new(WeakDom::new(DomInstanceBuilder::new("ROOT"))));
+static INTERNAL_DOM: LazyLock<Mutex<WeakDom>> =
+    LazyLock::new(|| Mutex::new(WeakDom::new(DomInstanceBuilder::new("ROOT"))));
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Instance {
     pub(crate) dom_ref: DomRef,
-    pub(crate) class_name: String,
+    pub(crate) class_name: Ustr,
 }
 
 impl Instance {
@@ -75,7 +83,7 @@ impl Instance {
 
             Some(Self {
                 dom_ref,
-                class_name: instance.class.clone(),
+                class_name: instance.class,
             })
         } else {
             None
@@ -96,14 +104,14 @@ impl Instance {
 
         let class_name = class_name.as_ref();
 
-        let instance = DomInstanceBuilder::new(class_name.to_string());
+        let instance = DomInstanceBuilder::new(class_name);
 
         let dom_root = dom.root_ref();
         let dom_ref = dom.insert(dom_root, instance);
 
         Self {
             dom_ref,
-            class_name: class_name.to_string(),
+            class_name: ustr(class_name),
         }
     }
 
@@ -244,7 +252,7 @@ impl Instance {
           on the Roblox Developer Hub
     */
     pub fn is_a(&self, class_name: impl AsRef<str>) -> bool {
-        class_is_a(&self.class_name, class_name).unwrap_or(false)
+        class_is_a(self.class_name, class_name).unwrap_or(false)
     }
 
     /**
@@ -341,7 +349,7 @@ impl Instance {
             .get_by_ref(self.dom_ref)
             .expect("Failed to find instance in document")
             .properties
-            .get(name.as_ref())
+            .get(&ustr(name.as_ref()))
             .cloned()
     }
 
@@ -358,7 +366,7 @@ impl Instance {
             .get_by_ref_mut(self.dom_ref)
             .expect("Failed to find instance in document")
             .properties
-            .insert(name.as_ref().to_string(), value);
+            .insert(ustr(name.as_ref()), value);
     }
 
     /**
@@ -374,7 +382,7 @@ impl Instance {
             .get_by_ref(self.dom_ref)
             .expect("Failed to find instance in document");
         if let Some(DomValue::Attributes(attributes)) =
-            inst.properties.get(PROPERTY_NAME_ATTRIBUTES)
+            inst.properties.get(&ustr(PROPERTY_NAME_ATTRIBUTES))
         {
             attributes.get(name.as_ref()).cloned()
         } else {
@@ -395,7 +403,7 @@ impl Instance {
             .get_by_ref(self.dom_ref)
             .expect("Failed to find instance in document");
         if let Some(DomValue::Attributes(attributes)) =
-            inst.properties.get(PROPERTY_NAME_ATTRIBUTES)
+            inst.properties.get(&ustr(PROPERTY_NAME_ATTRIBUTES))
         {
             attributes.clone().into_iter().collect()
         } else {
@@ -422,14 +430,14 @@ impl Instance {
             value => value,
         };
         if let Some(DomValue::Attributes(attributes)) =
-            inst.properties.get_mut(PROPERTY_NAME_ATTRIBUTES)
+            inst.properties.get_mut(&ustr(PROPERTY_NAME_ATTRIBUTES))
         {
             attributes.insert(name.as_ref().to_string(), value);
         } else {
             let mut attributes = DomAttributes::new();
             attributes.insert(name.as_ref().to_string(), value);
             inst.properties.insert(
-                PROPERTY_NAME_ATTRIBUTES.to_string(),
+                ustr(PROPERTY_NAME_ATTRIBUTES),
                 DomValue::Attributes(attributes),
             );
         }
@@ -449,11 +457,11 @@ impl Instance {
             .get_by_ref_mut(self.dom_ref)
             .expect("Failed to find instance in document");
         if let Some(DomValue::Attributes(attributes)) =
-            inst.properties.get_mut(PROPERTY_NAME_ATTRIBUTES)
+            inst.properties.get_mut(&ustr(PROPERTY_NAME_ATTRIBUTES))
         {
             attributes.remove(name.as_ref());
             if attributes.is_empty() {
-                inst.properties.remove(PROPERTY_NAME_ATTRIBUTES);
+                inst.properties.remove(&ustr(PROPERTY_NAME_ATTRIBUTES));
             }
         }
     }
@@ -470,11 +478,11 @@ impl Instance {
         let inst = dom
             .get_by_ref_mut(self.dom_ref)
             .expect("Failed to find instance in document");
-        if let Some(DomValue::Tags(tags)) = inst.properties.get_mut(PROPERTY_NAME_TAGS) {
+        if let Some(DomValue::Tags(tags)) = inst.properties.get_mut(&ustr(PROPERTY_NAME_TAGS)) {
             tags.push(name.as_ref());
         } else {
             inst.properties.insert(
-                PROPERTY_NAME_TAGS.to_string(),
+                ustr(PROPERTY_NAME_TAGS),
                 DomValue::Tags(vec![name.as_ref().to_string()].into()),
             );
         }
@@ -492,7 +500,7 @@ impl Instance {
         let inst = dom
             .get_by_ref(self.dom_ref)
             .expect("Failed to find instance in document");
-        if let Some(DomValue::Tags(tags)) = inst.properties.get(PROPERTY_NAME_TAGS) {
+        if let Some(DomValue::Tags(tags)) = inst.properties.get(&ustr(PROPERTY_NAME_TAGS)) {
             tags.iter().map(ToString::to_string).collect()
         } else {
             Vec::new()
@@ -511,7 +519,7 @@ impl Instance {
         let inst = dom
             .get_by_ref(self.dom_ref)
             .expect("Failed to find instance in document");
-        if let Some(DomValue::Tags(tags)) = inst.properties.get(PROPERTY_NAME_TAGS) {
+        if let Some(DomValue::Tags(tags)) = inst.properties.get(&ustr(PROPERTY_NAME_TAGS)) {
             let name = name.as_ref();
             tags.iter().any(|tag| tag == name)
         } else {
@@ -531,14 +539,12 @@ impl Instance {
         let inst = dom
             .get_by_ref_mut(self.dom_ref)
             .expect("Failed to find instance in document");
-        if let Some(DomValue::Tags(tags)) = inst.properties.get_mut(PROPERTY_NAME_TAGS) {
+        if let Some(DomValue::Tags(tags)) = inst.properties.get_mut(&ustr(PROPERTY_NAME_TAGS)) {
             let name = name.as_ref();
             let mut new_tags = tags.iter().map(ToString::to_string).collect::<Vec<_>>();
             new_tags.retain(|tag| tag != name);
-            inst.properties.insert(
-                PROPERTY_NAME_TAGS.to_string(),
-                DomValue::Tags(new_tags.into()),
-            );
+            inst.properties
+                .insert(ustr(PROPERTY_NAME_TAGS), DomValue::Tags(new_tags.into()));
         }
     }
 
@@ -617,7 +623,7 @@ impl Instance {
         let mut instance_ref = self.dom_ref;
 
         while let Some(instance) = dom.get_by_ref(instance_ref) {
-            if instance_ref != dom_root && instance.class != data_model::CLASS_NAME {
+            if instance_ref != dom_root && instance.class != "DataModel" {
                 instance_ref = instance.parent();
                 parts.push(instance.name.clone());
             } else {
@@ -696,8 +702,7 @@ impl Instance {
         predicate callback and a breadth-first search.
 
         ### See Also
-        * [`FindFirstDescendant`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstDescendant)
-            on the Roblox Developer Hub
+        * [`FindFirstDescendant`](https://create.roblox.com/docs/reference/engine/classes/Instance#FindFirstDescendant) on the Roblox Developer Hub
     */
     pub fn find_descendant<F>(&self, predicate: F) -> Option<Instance>
     where
@@ -727,11 +732,12 @@ impl Instance {
     }
 }
 
-impl LuaExportsTable<'_> for Instance {
+#[cfg(feature = "mlua")]
+impl LuaExportsTable for Instance {
     const EXPORT_NAME: &'static str = "Instance";
 
-    fn create_exports_table(lua: &Lua) -> LuaResult<LuaTable> {
-        let instance_new = |lua, class_name: String| {
+    fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+        let instance_new = |lua: &Lua, class_name: String| {
             if class_exists(&class_name) {
                 Instance::new_orphaned(class_name).into_lua(lua)
             } else {
@@ -759,13 +765,14 @@ impl LuaExportsTable<'_> for Instance {
     If a user wants to replicate Roblox engine behavior, they can use the
     instance registry, and register properties + methods from the lua side
 */
+#[cfg(feature = "mlua")]
 impl LuaUserData for Instance {
-    fn add_fields<'lua, F: LuaUserDataFields<'lua, Self>>(fields: &mut F) {
+    fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
         data_model::add_fields(fields);
         workspace::add_fields(fields);
     }
 
-    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         base::add_methods(methods);
         data_model::add_methods(methods);
         terrain::add_methods(methods);

@@ -80,7 +80,7 @@ unsafe extern "C" fn callback(
         .unwrap()
         .as_function()
         .unwrap()
-        .call::<_, ()>(LuaMultiValue::from_vec(args))
+        .call::<()>(LuaMultiValue::from_vec(args))
         .unwrap();
 }
 
@@ -144,7 +144,7 @@ impl FfiData for ClosureData {
 }
 
 impl LuaUserData for ClosureData {
-    fn add_methods<'lua, M: LuaUserDataMethods<'lua, Self>>(methods: &mut M) {
+    fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         methods.add_function("ref", |lua, this: LuaAnyUserData| {
             let ref_data = lua.create_userdata(RefData::new(
                 unsafe { this.borrow::<ClosureData>()?.get_inner_pointer() },

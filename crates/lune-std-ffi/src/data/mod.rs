@@ -1,5 +1,3 @@
-use std::cell::Ref;
-
 use lune_utils::fmt::{pretty_format_value, ValueFormatConfig};
 use mlua::prelude::*;
 
@@ -19,25 +17,60 @@ pub use self::{
 };
 use crate::ffi::FfiData;
 
-// Named registry keys
 mod association_names {
     pub const REF_INNER: &str = "__ref_inner";
     pub const SYM_INNER: &str = "__syn_inner";
 }
 
-// Get dynamic FfiData handle from LuaValue and LuaAnyUserData
+pub enum FfiDataRef {
+    Box(LuaUserDataRef<BoxData>),
+    Ref(LuaUserDataRef<RefData>),
+    Closure(LuaUserDataRef<ClosureData>),
+}
+
+impl FfiData for FfiDataRef {
+    fn check_inner_boundary(&self, offset: isize, size: usize) -> bool {
+        match self {
+            FfiDataRef::Box(d) => d.check_inner_boundary(offset, size),
+            FfiDataRef::Ref(d) => d.check_inner_boundary(offset, size),
+            FfiDataRef::Closure(d) => d.check_inner_boundary(offset, size),
+        }
+    }
+    unsafe fn get_inner_pointer(&self) -> *mut () {
+        match self {
+            FfiDataRef::Box(d) => d.get_inner_pointer(),
+            FfiDataRef::Ref(d) => d.get_inner_pointer(),
+            FfiDataRef::Closure(d) => d.get_inner_pointer(),
+        }
+    }
+    fn is_writable(&self) -> bool {
+        match self {
+            FfiDataRef::Box(d) => d.is_writable(),
+            FfiDataRef::Ref(d) => d.is_writable(),
+            FfiDataRef::Closure(d) => d.is_writable(),
+        }
+    }
+    fn is_readable(&self) -> bool {
+        match self {
+            FfiDataRef::Box(d) => d.is_readable(),
+            FfiDataRef::Ref(d) => d.is_readable(),
+            FfiDataRef::Closure(d) => d.is_readable(),
+        }
+    }
+}
+
 pub trait GetFfiData {
-    fn get_ffi_data(&self) -> LuaResult<Ref<dyn FfiData>>;
+    fn get_ffi_data(&self) -> LuaResult<FfiDataRef>;
     fn is_ffi_data(&self) -> bool;
 }
-impl GetFfiData for LuaAnyUserData<'_> {
-    fn get_ffi_data(&self) -> LuaResult<Ref<dyn FfiData>> {
+impl GetFfiData for LuaAnyUserData {
+    fn get_ffi_data(&self) -> LuaResult<FfiDataRef> {
         if self.is::<BoxData>() {
-            Ok(self.borrow::<BoxData>()? as Ref<dyn FfiData>)
+            Ok(FfiDataRef::Box(self.borrow::<BoxData>()?))
         } else if self.is::<RefData>() {
-            Ok(self.borrow::<RefData>()? as Ref<dyn FfiData>)
+            Ok(FfiDataRef::Ref(self.borrow::<RefData>()?))
         } else if self.is::<ClosureData>() {
-            Ok(self.borrow::<ClosureData>()? as Ref<dyn FfiData>)
+            Ok(FfiDataRef::Closure(self.borrow::<ClosureData>()?))
         } else {
             let config = ValueFormatConfig::new();
             Err(LuaError::external(format!(
@@ -50,8 +83,8 @@ impl GetFfiData for LuaAnyUserData<'_> {
         self.is::<BoxData>() | self.is::<RefData>() | self.is::<ClosureData>()
     }
 }
-impl GetFfiData for LuaValue<'_> {
-    fn get_ffi_data(&self) -> LuaResult<Ref<dyn FfiData>> {
+impl GetFfiData for LuaValue {
+    fn get_ffi_data(&self) -> LuaResult<FfiDataRef> {
         self.as_userdata()
             .ok_or_else(|| {
                 let config = ValueFormatConfig::new();

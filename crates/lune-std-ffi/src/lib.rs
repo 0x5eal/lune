@@ -13,6 +13,7 @@ mod ffi;
 use crate::{
     c::{export_c, export_fixed_types},
     data::{create_nullref, BoxData, GetFfiData, LibData},
+    ffi::FfiData,
 };
 
 /**
@@ -23,7 +24,7 @@ use crate::{
     Errors when out of memory.
 */
 pub fn module(lua: &Lua) -> LuaResult<LuaTable> {
-    let result = TableBuilder::new(lua)?
+    let result = TableBuilder::new(lua.clone())?
         .with_function("nullRef", |lua, ()| create_nullref(lua))?
         .with_function("box", |_lua, size: usize| Ok(BoxData::new(size)))?
         .with_function("open", |_lua, name: String| LibData::new(name))?

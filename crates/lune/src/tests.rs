@@ -5,45 +5,44 @@ use std::process::ExitCode;
 use anyhow::Result;
 use console::set_colors_enabled;
 use console::set_colors_enabled_stderr;
-use tokio::fs::read_to_string;
 
-use lune_utils::path::clean_path_and_make_absolute;
+use lune_utils::path::clean_path;
 
 use crate::Runtime;
 
 const ARGS: &[&str] = &["Foo", "Bar"];
 
+fn run_test(path: &str) -> Result<ExitCode> {
+    async_io::block_on(async {
+        // We need to change the current directory to the workspace root since
+        // we are in a sub-crate and tests would run relative to the sub-crate
+        let workspace_dir_str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+        let workspace_dir = clean_path(PathBuf::from(workspace_dir_str));
+        set_current_dir(&workspace_dir)?;
+
+        // Disable styling for stdout and stderr since
+        // some tests rely on output not being styled
+        set_colors_enabled(false);
+        set_colors_enabled_stderr(false);
+
+        // The rest of the test logic can continue as normal
+        let mut rt = Runtime::new()?
+            .with_args(ARGS)
+            .with_jit(true)
+            .set_unsafe_library_enabled(true);
+
+        let script_path = workspace_dir.join("tests").join(format!("{path}.luau"));
+        let script_values = rt.run_file(script_path).await?;
+
+        Ok(ExitCode::from(script_values.status()))
+    })
+}
+
 macro_rules! create_tests {
     ($($name:ident: $value:expr,)*) => { $(
-        #[tokio::test(flavor = "multi_thread")]
-        async fn $name() -> Result<ExitCode> {
-            // We need to change the current directory to the workspace root since
-            // we are in a sub-crate and tests would run relative to the sub-crate
-            let workspace_dir_str = format!("{}/../../", env!("CARGO_MANIFEST_DIR"));
-            let workspace_dir = clean_path_and_make_absolute(PathBuf::from(workspace_dir_str));
-            set_current_dir(&workspace_dir)?;
-
-            // Disable styling for stdout and stderr since
-            // some tests rely on output not being styled
-            set_colors_enabled(false);
-            set_colors_enabled_stderr(false);
-
-            // The rest of the test logic can continue as normal
-            let full_name = format!("{}/tests/{}.luau", workspace_dir.display(), $value);
-            let script = read_to_string(&full_name).await?;
-            let mut lune = Runtime::new().set_unsafe_library_enabled(true).with_args(
-                ARGS
-                    .clone()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            );
-            let script_name = full_name
-				.trim_end_matches(".luau")
-				.trim_end_matches(".lua")
-				.to_string();
-            let (exit_code, _) = lune.run(&script_name, &script).await?;
-            Ok(ExitCode::from(exit_code))
+        #[test]
+        fn $name() -> Result<ExitCode> {
+        	run_test($value)
         }
     )* }
 }
@@ -67,7 +66,7 @@ create_tests! {
     require_async_sequential: "require/tests/async_sequential",
     require_builtins: "require/tests/builtins",
     require_children: "require/tests/children",
-    require_init: "require/tests/init",
+    require_init: "require/tests/init_files",
     require_invalid: "require/tests/invalid",
     require_multi_ext: "require/tests/multi_ext",
     require_nested: "require/tests/nested",
@@ -89,12 +88,14 @@ create_tests! {
 create_tests! {
     datetime_format_local_time: "datetime/formatLocalTime",
     datetime_format_universal_time: "datetime/formatUniversalTime",
-    datetime_from_iso_date: "datetime/fromIsoDate",
+    datetime_from_rfc_2822: "datetime/fromRfc2822",
+    datetime_from_rfc_3339: "datetime/fromRfc3339",
     datetime_from_local_time: "datetime/fromLocalTime",
     datetime_from_universal_time: "datetime/fromUniversalTime",
     datetime_from_unix_timestamp: "datetime/fromUnixTimestamp",
     datetime_now: "datetime/now",
-    datetime_to_iso_date: "datetime/toIsoDate",
+    datetime_to_rfc_2822: "datetime/toRfc2822",
+    datetime_to_rfc_3339: "datetime/toRfc3339",
     datetime_to_local_time: "datetime/toLocalTime",
     datetime_to_universal_time: "datetime/toUniversalTime",
 }
@@ -148,16 +149,27 @@ create_tests! {
 create_tests! {
     net_request_codes: "net/request/codes",
     net_request_compression: "net/request/compression",
+    net_request_https: "net/request/https",
     net_request_methods: "net/request/methods",
     net_request_query: "net/request/query",
     net_request_redirect: "net/request/redirect",
-    net_url_encode: "net/url/encode",
-    net_url_decode: "net/url/decode",
+
+    net_serve_addresses: "net/serve/addresses",
+    net_serve_handles: "net/serve/handles",
+    net_serve_non_blocking: "net/serve/non_blocking",
     net_serve_requests: "net/serve/requests",
     net_serve_websockets: "net/serve/websockets",
+
     net_socket_basic: "net/socket/basic",
     net_socket_wss: "net/socket/wss",
     net_socket_wss_rw: "net/socket/wss_rw",
+
+    net_tcp_basic: "net/tcp/basic",
+    net_tcp_info: "net/tcp/info",
+    net_tcp_tls: "net/tcp/tls",
+
+    net_url_encode: "net/url/encode",
+    net_url_decode: "net/url/decode",
 }
 
 #[cfg(feature = "std-process")]
@@ -193,6 +205,7 @@ create_tests! {
     roblox_datatype_color3: "roblox/datatypes/Color3",
     roblox_datatype_color_sequence: "roblox/datatypes/ColorSequence",
     roblox_datatype_color_sequence_keypoint: "roblox/datatypes/ColorSequenceKeypoint",
+    roblox_datatype_content: "roblox/datatypes/Content",
     roblox_datatype_enum: "roblox/datatypes/Enum",
     roblox_datatype_faces: "roblox/datatypes/Faces",
     roblox_datatype_font: "roblox/datatypes/Font",
@@ -204,6 +217,7 @@ create_tests! {
     roblox_datatype_rect: "roblox/datatypes/Rect",
     roblox_datatype_udim: "roblox/datatypes/UDim",
     roblox_datatype_udim2: "roblox/datatypes/UDim2",
+    roblox_datatype_uniqueid: "roblox/datatypes/UniqueId",
     roblox_datatype_region3: "roblox/datatypes/Region3",
     roblox_datatype_region3int16: "roblox/datatypes/Region3int16",
     roblox_datatype_vector2: "roblox/datatypes/Vector2",
@@ -260,6 +274,8 @@ create_tests! {
     serde_compression_roundtrip: "serde/compression/roundtrip",
     serde_json_decode: "serde/json/decode",
     serde_json_encode: "serde/json/encode",
+    serde_jsonc_decode: "serde/jsonc/decode",
+    serde_jsonc_encode: "serde/jsonc/encode",
     serde_toml_decode: "serde/toml/decode",
     serde_toml_encode: "serde/toml/encode",
     serde_hashing_hash: "serde/hashing/hash",
